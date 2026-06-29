@@ -494,6 +494,100 @@
       margin: 0 6px;
     }
 
+    /* ── MUSIC PLAYER ── */
+    .music-player {
+      padding: 20px 24px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: var(--r-md);
+      backdrop-filter: blur(14px);
+    }
+
+    .music-top {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .music-art {
+      width: 50px;
+      height: 50px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, var(--accent-2), var(--accent));
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .music-art.spinning {
+      animation: spin-art 4s linear infinite;
+    }
+
+    @keyframes spin-art {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+
+    .music-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .music-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 3px;
+    }
+
+    .music-artist {
+      font-size: 12px;
+      color: var(--text-sub);
+    }
+
+    .music-vol-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .music-vol {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 88px;
+      height: 4px;
+      border-radius: 2px;
+      background: rgba(168, 85, 247, 0.25);
+      outline: none;
+      cursor: pointer;
+    }
+
+    .music-vol::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(168, 85, 247, 0.7);
+    }
+
+    .music-vol::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border: none;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      box-shadow: 0 0 6px rgba(168, 85, 247, 0.7);
+    }
+
     /* ── Responsive ── */
     @media(max-width:560px) {
       .hero {
@@ -707,17 +801,18 @@
           </svg>
         </a>
 
-        <!-- Twitter / X -->
-        <a class="scard" href="https://x.com/NotErased9" target="_blank" rel="noopener">
+        <!-- Instagram -->
+        <a class="scard" href="https://www.instagram.com/" target="_blank" rel="noopener">
           <div class="scard-icon-wrap">
-            <svg viewBox="0 0 24 24">
-              <path
-                d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+            <svg viewBox="0 0 24 24" class="stroke-only">
+              <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
+              <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"/>
+              <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"/>
             </svg>
           </div>
           <div class="scard-text">
-            <div class="scard-name">X</div>
-            <div class="scard-handle">@NotErased9</div>
+            <div class="scard-name">Instagram</div>
+            <div class="scard-handle">@yourhandle</div>
           </div>
           <svg class="scard-arrow" viewBox="0 0 24 24">
             <path d="M7 17l9.2-9.2M17 17V7H7" />
@@ -725,6 +820,32 @@
         </a>
 
       </div>
+    </section>
+
+    <!-- Music Player -->
+    <section class="section">
+      <div class="section-head">
+        <span class="section-label">Now Playing</span>
+        <div class="section-line"></div>
+      </div>
+      <div class="music-player">
+        <div class="music-top">
+          <div class="music-art" id="musicArt">
+            <svg viewBox="0 0 24 24" style="width:22px;height:22px;fill:none;stroke:rgba(255,255,255,0.85);stroke-width:1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+          </div>
+          <div class="music-info">
+            <div class="music-title" id="musicTitle">Loading…</div>
+            <div class="music-artist" id="musicArtist"></div>
+          </div>
+          <!-- volume icon + slider on the right -->
+          <div class="music-vol-row">
+            <svg viewBox="0 0 24 24" style="width:15px;height:15px;fill:none;stroke:var(--text-muted);stroke-width:2;flex-shrink:0"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+            <input type="range" class="music-vol" id="musicVol" min="0" max="100" value="60" step="1" />
+          </div>
+        </div>
+      </div>
+      <!-- hidden audio element — autoplay via JS after first interaction -->
+      <audio id="bgAudio" loop></audio>
     </section>
 
     <!-- Footer -->
@@ -779,7 +900,52 @@
       }
       go();
     })();
+    /* Music Player — autoplay with volume slider only */
+    (function () {
+      // ── PUT YOUR AUDIO FILES HERE ──────────────────────────────────────
+      const tracks = [
+        { title: 'Song Title',   artist: 'Artist Name',   src: 'audio/track1.mp3' },
+        { title: 'Song Title 2', artist: 'Artist Name 2', src: 'audio/track2.mp3' },
+      ];
+      // ──────────────────────────────────────────────────────────────────
+
+      let current = 0;
+      const audio   = document.getElementById('bgAudio');
+      const titleEl = document.getElementById('musicTitle');
+      const artEl   = document.getElementById('musicArtist');
+      const artWrap = document.getElementById('musicArt');
+      const vol     = document.getElementById('musicVol');
+
+      function loadTrack(idx) {
+        const t = tracks[idx];
+        audio.src         = t.src;
+        titleEl.textContent = t.title;
+        artEl.textContent   = t.artist;
+      }
+
+      // autoplay next track when one ends
+      audio.addEventListener('ended', () => {
+        current = (current + 1) % tracks.length;
+        loadTrack(current);
+        audio.play();
+      });
+
+      // spinning art while playing
+      audio.addEventListener('play',  () => artWrap.classList.add('spinning'));
+      audio.addEventListener('pause', () => artWrap.classList.remove('spinning'));
+
+      // volume slider
+      vol.addEventListener('input', () => { audio.volume = vol.value / 100; });
+      audio.volume = vol.value / 100;
+
+      // load first track and autoplay
+      loadTrack(0);
+      // browsers require a user gesture before autoplay; try anyway, it works on most GitHub Pages hosts
+      audio.play().catch(() => {
+        // if blocked, retry on first click anywhere
+        document.addEventListener('click', () => audio.play(), { once: true });
+      });
+    })();
   </script>
 </body>
-
 </html>
