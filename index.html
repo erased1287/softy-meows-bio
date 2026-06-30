@@ -635,7 +635,7 @@
         </a>
 
         <!-- Instagram -->
-        <a class="scard" href="https://www.instagram.com/" target="_blank" rel="noopener">
+        <a class="scard" href="https://www.instagram.com/softymeows/" target="_blank" rel="noopener">
           <div class="scard-icon-wrap">
             <svg class="stroke-only" viewBox="0 0 24 24">
               <rect x="2" y="2" width="20" height="20" rx="5" ry="5"/>
@@ -645,7 +645,7 @@
           </div>
           <div class="scard-text">
             <div class="scard-name">Instagram</div>
-            <div class="scard-handle">@yourhandle</div>
+            <div class="scard-handle">@plinh</div>
           </div>
           <svg class="scard-arrow" viewBox="0 0 24 24"><path d="M7 17l9.2-9.2M17 17V7H7"/></svg>
         </a>
@@ -682,7 +682,7 @@
           </div>
         </div>
       </div>
-      <audio id="bgAudio" crossorigin="anonymous"></audio>
+      <audio id="bgAudio"></audio>
     </section>
 
     <!-- Footer -->
@@ -742,69 +742,77 @@
     (function () {
       const tracks = [
         // ── ADD YOUR TRACKS HERE ─────────────────────────────────────────
-        // { title: 'Song name', artist: 'Artist', src: 'https://your-link/file.mp3' },
         { title: 'Track 1', artist: '', src: 'https://severe.wtf/uploads/e38eea667a94d280.mp3' },
+        // { title: 'Song name', artist: 'Artist', src: 'https://your-link/file.mp3' },
         // ─────────────────────────────────────────────────────────────────
       ];
 
       let current = 0;
-      const audio   = document.getElementById('bgAudio');
-      const titleEl = document.getElementById('musicTitle');
+      let blobUrl = null;
+      const audio    = document.getElementById('bgAudio');
+      const titleEl  = document.getElementById('musicTitle');
       const artistEl = document.getElementById('musicArtist');
       const statusEl = document.getElementById('musicStatus');
-      const artWrap = document.getElementById('musicArt');
-      const vol     = document.getElementById('musicVol');
+      const artWrap  = document.getElementById('musicArt');
+      const vol      = document.getElementById('musicVol');
 
       function setStatus(msg) { statusEl.textContent = msg; }
 
-      function loadTrack(idx) {
-        const t = tracks[idx];
-        titleEl.textContent  = t.title;
-        artistEl.textContent = t.artist || '';
-        setStatus('');
-        // Remove old sources and set new src directly
-        audio.removeAttribute('src');
-        audio.src = t.src;
-        audio.load();
-      }
-
-      audio.addEventListener('ended', () => {
-        current = (current + 1) % tracks.length;
-        loadTrack(current);
-        audio.play().catch(() => {});
-      });
-
-      audio.addEventListener('play',  () => { artWrap.classList.add('spinning'); setStatus(''); });
-      audio.addEventListener('pause', () => artWrap.classList.remove('spinning'));
+      audio.addEventListener('play',    () => { artWrap.classList.add('spinning'); setStatus(''); });
+      audio.addEventListener('pause',   () => artWrap.classList.remove('spinning'));
       audio.addEventListener('waiting', () => setStatus('Buffering…'));
       audio.addEventListener('canplay', () => setStatus(''));
-      audio.addEventListener('error', () => {
-        artWrap.classList.remove('spinning');
-        // CORS fallback: try loading without crossorigin attribute
-        if (audio.hasAttribute('crossorigin')) {
-          audio.removeAttribute('crossorigin');
-          audio.load();
-          audio.play().catch(() => setStatus('Click anywhere to play'));
-        } else {
-          setStatus('Unable to load — check the file URL');
-        }
+      audio.addEventListener('ended',   () => {
+        current = (current + 1) % tracks.length;
+        loadAndPlay(current);
       });
 
       vol.addEventListener('input', () => { audio.volume = vol.value / 100; });
       audio.volume = vol.value / 100;
 
-      loadTrack(0);
+      function loadAndPlay(idx) {
+        const t = tracks[idx];
+        titleEl.textContent  = t.title;
+        artistEl.textContent = t.artist || '';
+        setStatus('Loading…');
 
-      // Try autoplay; on block, wait for first user interaction
-      function tryPlay() {
-        audio.play().catch(() => {
-          setStatus('Click anywhere to play ♪');
-          document.addEventListener('click', () => {
-            audio.play().catch(() => setStatus('Unable to load — check the file URL'));
-          }, { once: true });
-        });
+        // Revoke previous blob to free memory
+        if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
+
+        // Fetch as blob — avoids CORS issues with <audio src>
+        fetch(t.src)
+          .then(r => {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.blob();
+          })
+          .then(blob => {
+            blobUrl = URL.createObjectURL(blob);
+            audio.src = blobUrl;
+            audio.load();
+            return audio.play();
+          })
+          .catch(err => {
+            console.warn('Music load error:', err);
+            // Direct src fallback (works if server has CORS headers)
+            audio.src = t.src;
+            audio.load();
+            audio.play().catch(() => {
+              setStatus('Click anywhere to play ♪');
+              document.addEventListener('click', () => audio.play().catch(() => {}), { once: true });
+            });
+          });
       }
-      tryPlay();
+
+      // Autoplay on load; browsers may block until first interaction
+      function start() {
+        loadAndPlay(0);
+      }
+
+      // Try immediately, retry on first click if blocked
+      try { start(); } catch(e) {}
+      document.addEventListener('click', () => {
+        if (audio.paused) audio.play().catch(() => {});
+      }, { once: true });
     })();
   </script>
 </body>
