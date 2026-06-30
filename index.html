@@ -78,6 +78,15 @@
     /* Snow */
     #snow { position: fixed; inset: 0; pointer-events: none; z-index: 1; }
 
+    /* Audio visualizer sphere */
+    #vizCanvas {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.85;
+    }
+
     /* Cat cursor */
     #cat {
       position: fixed;
@@ -508,6 +517,8 @@
     <div class="aurora-blob"></div>
   </div>
 
+  <canvas id="vizCanvas"></canvas>
+
   <canvas id="snow"></canvas>
 
   <!-- Cat cursor -->
@@ -742,13 +753,15 @@
     (function () {
       const tracks = [
         // ── ADD YOUR TRACKS HERE ─────────────────────────────────────────
-        { title: 'Track 1', artist: '', src: 'https://severe.wtf/uploads/e38eea667a94d280.mp3' },
-        // { title: 'Song name', artist: 'Artist', src: 'https://your-link/file.mp3' },
+        // Use a relative path to a file in your own repo (e.g. "audio/track1.mp3")
+        // or a link from a host that sends CORS headers (GitHub raw, jsDelivr, etc).
+        // A link like severe.wtf will NOT work — it blocks cross-origin requests.
+        { title: 'Track 1', artist: '', src: 'https://github.com/erased1287/softy-meows-bio/blob/main/tracks/tracks1.mp3' },
+        // { title: 'Song name', artist: 'Artist', src: 'audio/track2.mp3' },
         // ─────────────────────────────────────────────────────────────────
       ];
 
       let current = 0;
-      let blobUrl = null;
       const audio    = document.getElementById('bgAudio');
       const titleEl  = document.getElementById('musicTitle');
       const artistEl = document.getElementById('musicArtist');
@@ -762,57 +775,172 @@
       audio.addEventListener('pause',   () => artWrap.classList.remove('spinning'));
       audio.addEventListener('waiting', () => setStatus('Buffering…'));
       audio.addEventListener('canplay', () => setStatus(''));
+      audio.addEventListener('error',   () => setStatus('Could not load this file — check the path/URL'));
       audio.addEventListener('ended',   () => {
         current = (current + 1) % tracks.length;
-        loadAndPlay(current);
+        loadTrack(current);
+        attemptPlay();
       });
 
       vol.addEventListener('input', () => { audio.volume = vol.value / 100; });
       audio.volume = vol.value / 100;
 
-      function loadAndPlay(idx) {
+      function loadTrack(idx) {
         const t = tracks[idx];
         titleEl.textContent  = t.title;
         artistEl.textContent = t.artist || '';
-        setStatus('Loading…');
-
-        // Revoke previous blob to free memory
-        if (blobUrl) { URL.revokeObjectURL(blobUrl); blobUrl = null; }
-
-        // Fetch as blob — avoids CORS issues with <audio src>
-        fetch(t.src)
-          .then(r => {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.blob();
-          })
-          .then(blob => {
-            blobUrl = URL.createObjectURL(blob);
-            audio.src = blobUrl;
-            audio.load();
-            return audio.play();
-          })
-          .catch(err => {
-            console.warn('Music load error:', err);
-            // Direct src fallback (works if server has CORS headers)
-            audio.src = t.src;
-            audio.load();
-            audio.play().catch(() => {
-              setStatus('Click anywhere to play ♪');
-              document.addEventListener('click', () => audio.play().catch(() => {}), { once: true });
-            });
-          });
+        audio.src = t.src;
+        audio.load();
       }
 
-      // Autoplay on load; browsers may block until first interaction
-      function start() {
-        loadAndPlay(0);
+      function attemptPlay() {
+        audio.play().catch(() => {
+          setStatus('Click anywhere to play ♪');
+          document.addEventListener('click', () => {
+            audio.play().then(() => setStatus('')).catch(() => setStatus('Could not load this file'));
+          }, { once: true });
+        });
       }
 
-      // Try immediately, retry on first click if blocked
-      try { start(); } catch(e) {}
+      loadTrack(0);
+      attemptPlay();
+    })();
+    /* Audio-reactive sphere visualizer (bars arranged around a sphere) */
+    (function () {
+      const canvas = document.getElementById('vizCanvas');
+      const ctx = canvas.getContext('2d');
+      let W, H, cx, cy;
+      function resize() {
+        W = canvas.width = innerWidth;
+        H = canvas.height = innerHeight;
+        cx = W / 2;
+        cy = H / 2;
+      }
+      resize();
+      addEventListener('resize', resize);
+
+      const audio = document.getElementById('bgAudio');
+      let analyser, dataArray, bufferLength, audioCtx, sourceNode;
+      let started = false;
+
+      function setupAudioGraph() {
+        if (started) return;
+        try {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          sourceNode = audioCtx.createMediaElementSource(audio);
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 128;
+          bufferLength = analyser.frequencyBinCount;
+          dataArray = new Uint8Array(bufferLength);
+          sourceNode.connect(analyser);
+          analyser.connect(audioCtx.destination);
+          started = true;
+        } catch (e) {
+          console.warn('Visualizer audio graph failed:', e);
+        }
+      }
+
+      // Set up once audio starts playing (needs a media element + user gesture in most browsers)
+      audio.addEventListener('play', () => {
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        setupAudioGraph();
+      });
       document.addEventListener('click', () => {
-        if (audio.paused) audio.play().catch(() => {});
+        if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
       }, { once: true });
+
+      // Sphere geometry: distribute N points evenly on a sphere (Fibonacci sphere)
+      const NUM_BARS = 64;
+      const RADIUS = Math.min(140, Math.min(innerWidth, innerHeight) * 0.16);
+      const points = [];
+      (function buildSphere() {
+        const offset = 2 / NUM_BARS;
+        const increment = Math.PI * (3 - Math.sqrt(5)); // golden angle
+        for (let i = 0; i < NUM_BARS; i++) {
+          const y = (i * offset) - 1 + (offset / 2);
+          const r = Math.sqrt(1 - y * y);
+          const phi = i * increment;
+          const x = Math.cos(phi) * r;
+          const z = Math.sin(phi) * r;
+          points.push({ x, y, z, freqIdx: i % 32 });
+        }
+      })();
+
+      let rotation = 0;
+      let smoothed = new Array(NUM_BARS).fill(0);
+
+      function draw() {
+        ctx.clearRect(0, 0, W, H);
+
+        if (analyser) {
+          analyser.getByteFrequencyData(dataArray);
+        }
+
+        rotation += 0.0022;
+        const cosR = Math.cos(rotation);
+        const sinR = Math.sin(rotation);
+
+        // project + sort by depth for simple painter's algorithm
+        const projected = points.map(p => {
+          // rotate around Y axis
+          const x = p.x * cosR - p.z * sinR;
+          const z = p.x * sinR + p.z * cosR;
+          const y = p.y;
+
+          const scale = 1 / (2 - z); // simple perspective
+          const sx = cx + x * RADIUS * scale;
+          const sy = cy + y * RADIUS * scale;
+
+          let amp = 0;
+          if (dataArray) {
+            amp = dataArray[p.freqIdx] / 255;
+          } else {
+            // idle ambient animation when nothing is analysed yet
+            amp = (Math.sin(rotation * 30 + p.freqIdx) + 1) / 2 * 0.25;
+          }
+
+          return { sx, sy, z, scale, amp, nx: x, ny: y, nz: z };
+        });
+
+        projected.sort((a, b) => a.z - b.z);
+
+        projected.forEach((p, i) => {
+          const idx = points.indexOf(points[i]);
+          const smoothIdx = i;
+          smoothed[smoothIdx] += (p.amp - smoothed[smoothIdx]) * 0.25;
+          const amp = smoothed[smoothIdx];
+
+          const barLen = 14 + amp * 70;
+          const dirLen = Math.sqrt(p.nx * p.nx + p.ny * p.ny) || 0.0001;
+          const dx = (p.nx / dirLen) * barLen * p.scale;
+          const dy = (p.ny / dirLen) * barLen * p.scale;
+
+          const depthFade = (p.z + 1) / 2; // 0 (back) -> 1 (front)
+          const alpha = 0.15 + depthFade * 0.55;
+          const width = 2 + depthFade * 2.5;
+
+          const grad = ctx.createLinearGradient(p.sx, p.sy, p.sx + dx, p.sy + dy);
+          grad.addColorStop(0, `rgba(168,85,247,${alpha * 0.4})`);
+          grad.addColorStop(1, `rgba(216,180,254,${alpha})`);
+
+          ctx.strokeStyle = grad;
+          ctx.lineWidth = width;
+          ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.moveTo(p.sx, p.sy);
+          ctx.lineTo(p.sx + dx, p.sy + dy);
+          ctx.stroke();
+
+          // glowing tip dot
+          ctx.beginPath();
+          ctx.arc(p.sx + dx, p.sy + dy, width * 0.6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(216,180,254,${alpha * 0.9})`;
+          ctx.fill();
+        });
+
+        requestAnimationFrame(draw);
+      }
+      draw();
     })();
   </script>
 </body>
