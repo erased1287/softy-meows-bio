@@ -845,39 +845,61 @@
       attemptPlay();
     })();
 
-    /* ── GUESTBOOK (shared storage, auto-delete oldest, admin delete) ── */
+    /* ── GUESTBOOK (Firebase Realtime DB, auto-delete oldest, admin delete) ── */
     (function () {
+      // ════════════════════════════════════════════════════════════════
+      // SETUP INSTRUCTIONS (one-time, ~2 min):
+      //  1. Go to https://console.firebase.google.com
+      //  2. Create a project (any name), skip Google Analytics
+      //  3. Click "Realtime Database" → Create Database → Start in TEST mode
+      //  4. Copy your DB URL (looks like https://YOUR-PROJECT-default-rtdb.firebaseio.com)
+      //  5. Paste it below as FIREBASE_URL
+      // ════════════════════════════════════════════════════════════════
+      const FIREBASE_URL  = 'https://console.firebase.google.com/u/0/project/guest-book-7ac96/database/guest-book-7ac96-default-rtdb/data/~2F';
+      const DB_PATH       = '/guestbook.json';
       const MAX_ENTRIES   = 50;
-      const ADMIN_DISCORD = '1438102577903435787'; // only this ID can delete
-      const STORAGE_KEY   = 'gb_entries';
+      const ADMIN_ID      = '1438102577903435787'; // your Discord ID
 
-      const entriesEl    = document.getElementById('gbEntries');
-      const emptyEl      = document.getElementById('gbEmpty');
-      const nameIn       = document.getElementById('gbName');
-      const msgIn        = document.getElementById('gbMsg');
-      const sendBtn      = document.getElementById('gbSend');
-      const adminInput   = document.getElementById('gbAdminInput');
-      const adminBtn     = document.getElementById('gbAdminBtn');
-      const adminStatus  = document.getElementById('gbAdminStatus');
+      const entriesEl   = document.getElementById('gbEntries');
+      const emptyEl     = document.getElementById('gbEmpty');
+      const nameIn      = document.getElementById('gbName');
+      const msgIn       = document.getElementById('gbMsg');
+      const sendBtn     = document.getElementById('gbSend');
+      const adminInput  = document.getElementById('gbAdminInput');
+      const adminBtn    = document.getElementById('gbAdminBtn');
+      const adminStatus = document.getElementById('gbAdminStatus');
 
-      let isAdmin = false;
       let entries = [];
+      let isAdmin = false;
 
-      // ── storage helpers ──
-      async function loadFromStorage() {
+      // ── Firebase REST helpers ──────────────────────────────────────
+      const DB = FIREBASE_URL + DB_PATH;
+
+      async function fbGet() {
         try {
-          const res = await window.storage.get(STORAGE_KEY, true); // shared=true
-          entries = res ? JSON.parse(res.value) : [];
-        } catch { entries = []; }
+          const r = await fetch(DB);
+          if (!r.ok) throw new Error(r.status);
+          const data = await r.json();
+          return data ? Object.values(data) : [];
+        } catch(e) { console.warn('FB get error', e); return []; }
       }
 
-      async function saveToStorage() {
+      async function fbSet(list) {
+        // Convert array to Firebase object keyed by ts for easy deletion
+        const obj = {};
+        list.forEach(e => { obj['e' + e.ts + '_' + Math.random().toString(36).slice(2,6)] = e; });
         try {
-          await window.storage.set(STORAGE_KEY, JSON.stringify(entries), true);
-        } catch(e) { console.warn('GB save failed', e); }
+          await fetch(DB, { method: 'PUT', headers: {'Content-Type':'application/json'}, body: JSON.stringify(obj) });
+        } catch(e) { console.warn('FB set error', e); }
       }
 
-      // ── helpers ──
+      async function fbPush(entry) {
+        try {
+          await fetch(DB, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(entry) });
+        } catch(e) { console.warn('FB push error', e); }
+      }
+
+      // ── helpers ───────────────────────────────────────────────────
       function sanitize(str) {
         return str.replace(/[<>&"']/g, c =>
           ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
@@ -886,25 +908,23 @@
       function timeAgo(ts) {
         const s = Math.floor((Date.now() - ts) / 1000);
         if (s < 60)    return 'just now';
-        if (s < 3600)  return Math.floor(s/60) + 'm ago';
-        if (s < 86400) return Math.floor(s/3600) + 'h ago';
-        return Math.floor(s/86400) + 'd ago';
+        if (s < 3600)  return Math.floor(s/60)+'m ago';
+        if (s < 86400) return Math.floor(s/3600)+'h ago';
+        return Math.floor(s/86400)+'d ago';
       }
 
-      // ── render ──
+      // ── render ────────────────────────────────────────────────────
       function render() {
         Array.from(entriesEl.querySelectorAll('.gb-entry')).forEach(el => el.remove());
         emptyEl.style.display = entries.length ? 'none' : 'block';
 
-        [...entries].reverse().forEach((e, revIdx) => {
-          const realIdx = entries.length - 1 - revIdx; // index in original array
+        // newest first
+        [...entries].sort((a,b) => b.ts - a.ts).forEach(e => {
           const div = document.createElement('div');
           div.className = 'gb-entry';
-
           const delBtn = isAdmin
-            ? `<button class="gb-entry-del" data-idx="${realIdx}" title="Delete">✕</button>`
+            ? `<button class="gb-entry-del" title="Delete">✕</button>`
             : '';
-
           div.innerHTML = `
             <div class="gb-entry-left">
               <div class="gb-entry-name">${sanitize(e.name)}</div>
@@ -913,30 +933,48 @@
             <div class="gb-entry-time">${timeAgo(e.ts)}</div>
             ${delBtn}
           `;
-
           if (isAdmin) {
             div.querySelector('.gb-entry-del').addEventListener('click', async () => {
-              entries.splice(realIdx, 1);
-              await saveToStorage();
+              entries = entries.filter(x => x.ts !== e.ts);
+              await fbSet(entries);
               render();
             });
           }
-
           entriesEl.appendChild(div);
         });
       }
 
-      // ── add entry ──
-      async function addEntry(name, msg) {
-        entries.push({ name: name.trim(), msg: msg.trim(), ts: Date.now() });
-        // auto-delete oldest if over limit
-        if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
-        await saveToStorage();
+      // ── load all entries ──────────────────────────────────────────
+      async function loadEntries() {
+        emptyEl.textContent = 'Loading…';
+        entries = await fbGet();
+        emptyEl.textContent = 'No messages yet — be the first! ✨';
         render();
-        entriesEl.scrollTop = 0;
       }
 
-      // ── send ──
+      // ── add entry ─────────────────────────────────────────────────
+      async function addEntry(name, msg) {
+        const entry = { name: name.trim(), msg: msg.trim(), ts: Date.now() };
+
+        // optimistic UI first
+        entries.push(entry);
+        render();
+        entriesEl.scrollTop = 0;
+
+        // push to Firebase
+        await fbPush(entry);
+
+        // auto-prune oldest if over limit (reload and trim)
+        entries = await fbGet();
+        entries.sort((a,b) => a.ts - b.ts);
+        if (entries.length > MAX_ENTRIES) {
+          entries.splice(0, entries.length - MAX_ENTRIES);
+          await fbSet(entries);
+        }
+        render();
+      }
+
+      // ── send button ───────────────────────────────────────────────
       sendBtn.addEventListener('click', async () => {
         const name = nameIn.value.trim();
         const msg  = msgIn.value.trim();
@@ -953,21 +991,19 @@
 
       msgIn.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click(); });
 
-      // ── admin verify (Discord ID as the code) ──
-      adminBtn.addEventListener('click', () => {
-        const val = adminInput.value.trim();
-        if (val === ADMIN_DISCORD) {
+      // ── admin verify ──────────────────────────────────────────────
+      function doVerify() {
+        if (adminInput.value.trim() === ADMIN_ID) {
           isAdmin = true;
           adminInput.value = '';
-          adminStatus.textContent = '✓ admin mode on — delete buttons visible';
+          adminStatus.textContent = '✓ admin mode — delete buttons visible';
           adminStatus.style.color = '#34d399';
           adminBtn.textContent = 'logout';
           adminBtn.onclick = () => {
             isAdmin = false;
             adminStatus.textContent = '';
             adminBtn.textContent = 'verify';
-            adminBtn.onclick = null;
-            adminBtn.addEventListener('click', verifyHandler);
+            adminBtn.onclick = doVerify;
             render();
           };
           render();
@@ -976,18 +1012,15 @@
           adminStatus.style.color = '#f87171';
           setTimeout(() => { adminStatus.textContent = ''; }, 2000);
         }
-      });
+      }
+      adminBtn.addEventListener('click', doVerify);
+      adminInput.addEventListener('keydown', e => { if (e.key === 'Enter') doVerify(); });
 
-      function verifyHandler() { adminBtn.click(); }
-
-      // ── refresh timestamps every minute ──
+      // ── refresh timestamps every minute ──────────────────────────
       setInterval(render, 60000);
 
-      // ── init ──
-      (async () => {
-        await loadFromStorage();
-        render();
-      })();
+      // ── init ──────────────────────────────────────────────────────
+      loadEntries();
     })();
 
         /* ── SPHERE VISUALIZER ── */
