@@ -351,6 +351,68 @@
       font-style: italic;
     }
 
+    .gb-entry-del {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 13px;
+      cursor: none;
+      padding: 2px 5px;
+      border-radius: 5px;
+      opacity: 0.4;
+      transition: opacity 0.15s, color 0.15s;
+      flex-shrink: 0;
+      align-self: flex-start;
+      margin-top: 1px;
+    }
+    .gb-entry-del:hover { opacity: 1; color: #f87171; }
+
+    .gb-admin-row {
+      padding: 8px 20px 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      border-top: 1px solid var(--card-border);
+    }
+
+    .gb-admin-input {
+      background: rgba(168,85,247,0.07);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      font-size: 11.5px;
+      padding: 6px 12px;
+      outline: none;
+      flex: 1;
+      transition: border-color 0.2s;
+      cursor: text;
+    }
+    .gb-admin-input::placeholder { color: var(--text-muted); }
+    .gb-admin-input:focus { border-color: rgba(168,85,247,0.45); }
+
+    .gb-admin-btn {
+      background: var(--accent-dim);
+      border: 1px solid rgba(168,85,247,0.3);
+      border-radius: 8px;
+      color: var(--accent);
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 6px 14px;
+      cursor: none;
+      transition: background 0.2s;
+      white-space: nowrap;
+    }
+    .gb-admin-btn:hover { background: rgba(168,85,247,0.22); }
+
+    .gb-admin-status {
+      font-size: 10.5px;
+      padding: 2px 20px 8px;
+      color: var(--text-muted);
+      font-style: italic;
+      min-height: 18px;
+    }
+
     .gb-form {
       display: flex;
       gap: 8px;
@@ -636,6 +698,12 @@
           <input class="gb-input" id="gbMsg"  type="text" placeholder="comment" maxlength="120" autocomplete="off"/>
           <button class="gb-send" id="gbSend">send</button>
         </div>
+        <!-- Admin panel — hidden until correct Discord ID entered -->
+        <div class="gb-admin-row" id="gbAdminRow">
+          <input class="gb-admin-input" id="gbAdminInput" type="password" placeholder="admin code" autocomplete="off"/>
+          <button class="gb-admin-btn" id="gbAdminBtn">verify</button>
+        </div>
+        <div class="gb-admin-status" id="gbAdminStatus"></div>
       </div>
     </section>
 
@@ -777,94 +845,152 @@
       attemptPlay();
     })();
 
-    /* ── GUESTBOOK (localStorage, auto-save) ── */
+    /* ── GUESTBOOK (shared storage, auto-delete oldest, admin delete) ── */
     (function () {
-      const STORAGE_KEY = 'softymeows_guestbook_v1';
-      const MAX_ENTRIES = 50;
-      const entriesEl = document.getElementById('gbEntries');
-      const emptyEl   = document.getElementById('gbEmpty');
-      const nameIn    = document.getElementById('gbName');
-      const msgIn     = document.getElementById('gbMsg');
-      const sendBtn   = document.getElementById('gbSend');
+      const MAX_ENTRIES   = 50;
+      const ADMIN_DISCORD = '1438102577903435787'; // only this ID can delete
+      const STORAGE_KEY   = 'gb_entries';
 
-      function loadEntries() {
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-        catch { return []; }
+      const entriesEl    = document.getElementById('gbEntries');
+      const emptyEl      = document.getElementById('gbEmpty');
+      const nameIn       = document.getElementById('gbName');
+      const msgIn        = document.getElementById('gbMsg');
+      const sendBtn      = document.getElementById('gbSend');
+      const adminInput   = document.getElementById('gbAdminInput');
+      const adminBtn     = document.getElementById('gbAdminBtn');
+      const adminStatus  = document.getElementById('gbAdminStatus');
+
+      let isAdmin = false;
+      let entries = [];
+
+      // ── storage helpers ──
+      async function loadFromStorage() {
+        try {
+          const res = await window.storage.get(STORAGE_KEY, true); // shared=true
+          entries = res ? JSON.parse(res.value) : [];
+        } catch { entries = []; }
       }
 
-      function saveEntries(entries) {
-        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(entries)); } catch {}
+      async function saveToStorage() {
+        try {
+          await window.storage.set(STORAGE_KEY, JSON.stringify(entries), true);
+        } catch(e) { console.warn('GB save failed', e); }
+      }
+
+      // ── helpers ──
+      function sanitize(str) {
+        return str.replace(/[<>&"']/g, c =>
+          ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
       }
 
       function timeAgo(ts) {
         const s = Math.floor((Date.now() - ts) / 1000);
-        if (s < 60)  return 'just now';
-        if (s < 3600) return Math.floor(s/60) + 'm ago';
+        if (s < 60)    return 'just now';
+        if (s < 3600)  return Math.floor(s/60) + 'm ago';
         if (s < 86400) return Math.floor(s/3600) + 'h ago';
         return Math.floor(s/86400) + 'd ago';
       }
 
-      function sanitize(str) {
-        return str.replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
-      }
-
-      function renderEntries() {
-        const entries = loadEntries();
-        // remove empty placeholder
-        if (emptyEl) emptyEl.style.display = entries.length ? 'none' : 'block';
-
-        // clear existing rendered entries (keep the empty div)
+      // ── render ──
+      function render() {
         Array.from(entriesEl.querySelectorAll('.gb-entry')).forEach(el => el.remove());
+        emptyEl.style.display = entries.length ? 'none' : 'block';
 
-        // render newest first
-        [...entries].reverse().forEach(e => {
+        [...entries].reverse().forEach((e, revIdx) => {
+          const realIdx = entries.length - 1 - revIdx; // index in original array
           const div = document.createElement('div');
           div.className = 'gb-entry';
+
+          const delBtn = isAdmin
+            ? `<button class="gb-entry-del" data-idx="${realIdx}" title="Delete">✕</button>`
+            : '';
+
           div.innerHTML = `
             <div class="gb-entry-left">
               <div class="gb-entry-name">${sanitize(e.name)}</div>
               <div class="gb-entry-msg">${sanitize(e.msg)}</div>
             </div>
             <div class="gb-entry-time">${timeAgo(e.ts)}</div>
+            ${delBtn}
           `;
+
+          if (isAdmin) {
+            div.querySelector('.gb-entry-del').addEventListener('click', async () => {
+              entries.splice(realIdx, 1);
+              await saveToStorage();
+              render();
+            });
+          }
+
           entriesEl.appendChild(div);
         });
       }
 
-      function addEntry(name, msg) {
-        const entries = loadEntries();
+      // ── add entry ──
+      async function addEntry(name, msg) {
         entries.push({ name: name.trim(), msg: msg.trim(), ts: Date.now() });
-        // keep only the latest MAX_ENTRIES
+        // auto-delete oldest if over limit
         if (entries.length > MAX_ENTRIES) entries.splice(0, entries.length - MAX_ENTRIES);
-        saveEntries(entries);
-        renderEntries();
-        // scroll to top (newest)
+        await saveToStorage();
+        render();
         entriesEl.scrollTop = 0;
       }
 
-      sendBtn.addEventListener('click', () => {
+      // ── send ──
+      sendBtn.addEventListener('click', async () => {
         const name = nameIn.value.trim();
         const msg  = msgIn.value.trim();
         if (!name || !msg) return;
-        addEntry(name, msg);
+        sendBtn.disabled = true;
+        sendBtn.textContent = '...';
+        await addEntry(name, msg);
         nameIn.value = '';
         msgIn.value  = '';
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'send';
         nameIn.focus();
       });
 
-      // send on Enter key from message field
-      msgIn.addEventListener('keydown', e => {
-        if (e.key === 'Enter') sendBtn.click();
+      msgIn.addEventListener('keydown', e => { if (e.key === 'Enter') sendBtn.click(); });
+
+      // ── admin verify (Discord ID as the code) ──
+      adminBtn.addEventListener('click', () => {
+        const val = adminInput.value.trim();
+        if (val === ADMIN_DISCORD) {
+          isAdmin = true;
+          adminInput.value = '';
+          adminStatus.textContent = '✓ admin mode on — delete buttons visible';
+          adminStatus.style.color = '#34d399';
+          adminBtn.textContent = 'logout';
+          adminBtn.onclick = () => {
+            isAdmin = false;
+            adminStatus.textContent = '';
+            adminBtn.textContent = 'verify';
+            adminBtn.onclick = null;
+            adminBtn.addEventListener('click', verifyHandler);
+            render();
+          };
+          render();
+        } else {
+          adminStatus.textContent = '✗ wrong code';
+          adminStatus.style.color = '#f87171';
+          setTimeout(() => { adminStatus.textContent = ''; }, 2000);
+        }
       });
 
-      // refresh timestamps every minute
-      setInterval(renderEntries, 60000);
+      function verifyHandler() { adminBtn.click(); }
 
-      // initial render
-      renderEntries();
+      // ── refresh timestamps every minute ──
+      setInterval(render, 60000);
+
+      // ── init ──
+      (async () => {
+        await loadFromStorage();
+        render();
+      })();
     })();
 
-    /* ── SPHERE VISUALIZER ── */
+        /* ── SPHERE VISUALIZER ── */
     (function () {
       const canvas = document.getElementById('vizCanvas');
       const ctx = canvas.getContext('2d');
